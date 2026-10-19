@@ -72,7 +72,11 @@ export async function POST(req: NextRequest) {
       for (const diag of examData.diagrams) {
         try {
           const pageImg = images[diag.pageIndex] || images[0];
-          const rawBase64 = pageImg.replace(/^data:image\/[a-zA-Z]+;base64,/, '');
+          // Skip image extraction if input is raw PDF
+          if (pageImg.includes('application/pdf') || pageImg.startsWith('data:application/pdf')) {
+            continue;
+          }
+          const rawBase64 = pageImg.replace(/^data:[^;]+;base64,/, '');
           const imgBuf = Buffer.from(rawBase64, 'base64');
           
           const metadata = await sharp(imgBuf).metadata();

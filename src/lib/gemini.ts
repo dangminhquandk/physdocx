@@ -59,10 +59,13 @@ Trả về DUY NHẤT một khối JSON hợp lệ theo định dạng sau (khô
   const parts: any[] = [{ text: prompt }];
 
   for (const imgBase64 of imagesBase64) {
-    const cleanBase64 = imgBase64.replace(/^data:image\/[a-zA-Z]+;base64,/, '');
+    const match = imgBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-+.]+);base64,/);
+    const mimeType = match ? match[1] : (imgBase64.startsWith('JVBER') ? 'application/pdf' : 'image/jpeg');
+    const cleanBase64 = imgBase64.replace(/^data:[^;]+;base64,/, '');
+
     parts.push({
       inline_data: {
-        mime_type: 'image/jpeg',
+        mime_type: mimeType,
         data: cleanBase64
       }
     });
