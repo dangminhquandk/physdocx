@@ -68,28 +68,49 @@ Trả về DUY NHẤT một khối JSON hợp lệ theo định dạng sau (khô
     });
   }
 
-  // Use Gemini 2.5 Flash endpoint via native fetch (safe for Vercel Serverless / Webpack)
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  // Try gemini-3.8-flash as recommended by Google, with fallbacks
+  const candidateModels = [
+    'gemini-3.8-flash',
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash'
+  ];
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts }],
-      generationConfig: {
-        response_mime_type: 'application/json'
+  let lastError = '';
+  let responseText = '';
+
+  for (const model of candidateModels) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: {
+            response_mime_type: 'application/json'
+          }
+        })
+      });
+
+      if (response.ok) {
+        const resultJson = await response.json();
+        const candidate = resultJson.candidates?.[0];
+        responseText = candidate?.content?.parts?.[0]?.text || "{}";
+        break; // Success!
+      } else {
+        const errText = await response.text();
+        lastError = `Model ${model} (${response.status}): ${errText}`;
+        console.warn(`Gemini model ${model} failed, trying next:`, lastError);
       }
-    })
-  });
-
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Lỗi từ máy chủ Gemini API (${response.status}): ${errText}`);
+    } catch (fetchErr: any) {
+      lastError = fetchErr.message;
+    }
   }
 
-  const resultJson = await response.json();
-  const candidate = resultJson.candidates?.[0];
-  const responseText = candidate?.content?.parts?.[0]?.text || "{}";
+  if (!responseText) {
+    throw new Error(`Lỗi kết nối máy chủ Gemini API: ${lastError}`);
+  }
 
   try {
     const parsedData = JSON.parse(responseText) as ExamData;
