@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ExamData, ConversionResponse } from '@/lib/types';
+import { parsePhysicsExamDirect } from '@/lib/gemini-client';
 
 export default function Home() {
   const [files, setFiles] = useState<{ file: File; preview: string }[]>([]);
@@ -13,7 +14,45 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'questions' | 'diagrams'>('questions');
   const [showSettings, setShowSettings] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [serverApiKey, setServerApiKey] = useState('');
+  const [isKeyConfigured, setIsKeyConfigured] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load key from localStorage and fetch server configuration
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('PHYS_GEMINI_KEY') || '';
+      if (stored) {
+        setApiKey(stored);
+        setIsKeyConfigured(true);
+      }
+    }
+
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(data => {
+        if (data?.apiKey) {
+          setServerApiKey(data.apiKey);
+          setIsKeyConfigured(true);
+          setApiKey(prev => prev || data.apiKey);
+        }
+      })
+      .catch(err => console.log('Config info:', err));
+  }, []);
+
+  const handleSaveApiKey = () => {
+    const trimmed = apiKey.trim();
+    if (typeof window !== 'undefined') {
+      if (trimmed) {
+        localStorage.setItem('PHYS_GEMINI_KEY', trimmed);
+        setIsKeyConfigured(true);
+      } else {
+        localStorage.removeItem('PHYS_GEMINI_KEY');
+        setIsKeyConfigured(!!serverApiKey);
+      }
+    }
+    setShowSettings(false);
+  };
 
   // File handling
   const handleFiles = (incomingFiles: FileList | null) => {
@@ -44,7 +83,7 @@ export default function Home() {
         return;
       }
 
-      // If it's an image, resize large camera photos to ensure fast upload within Vercel payload limits
+      // If it's an image, resize large camera photos
       const reader = new FileReader();
       reader.onload = (e) => {
         const dataUrl = e.target?.result as string;
@@ -88,59 +127,80 @@ export default function Home() {
     setStepMessage('Đang chuẩn bị tệp tin và kiểm tra dữ liệu...');
 
     try {
-      let imagesBase64: string[] = [];
-
-      if (!useDemo) {
-        if (files.length === 0) {
-          alert('Cô vui lòng tải lên ít nhất một ảnh đề thi hoặc bấm nút "Dùng thử với Đề mẫu" ạ!');
-          setLoading(false);
-          return;
+      if (useDemo) {
+        setStepMessage('Đang đóng gói đề mẫu HSG Đà Nẵng...');
+        const response = await fetch('/api/convert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ useDemo: true })
+        });
+        const data: ConversionResponse = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || 'Chuyển đổi thất bại');
         }
-
-        setStepMessage('Đang khử nhiễu và đọc dữ liệu hình ảnh...');
-        imagesBase64 = await Promise.all(files.map(f => fileToBase64(f.file)));
+        setCurrentStep(4);
+        setResult(data);
+        return;
       }
 
-      // Step simulation for visual reassurance for the teacher
-      const stepTimer1 = setTimeout(() => {
-        setCurrentStep(2);
-        setStepMessage('AI đang nhận diện công thức Vật lý (phân số, số mũ, ký hiệu Hy Lạp)...');
-      }, 1500);
+      if (files.length === 0) {
+        alert('Cô vui lòng tải lên ít nhất một ảnh đề thi hoặc bấm nút "Dùng thử với Đề mẫu" ạ!');
+        setLoading(false);
+        return;
+      }
 
-      const stepTimer2 = setTimeout(() => {
-        setCurrentStep(3);
-        setStepMessage('Đang tự động phát hiện và cắt đồ thị, sơ đồ mạch điện...');
-      }, 3500);
+      const effectiveKey = (apiKey || serverApiKey).trim();
+      if (!effectiveKey) {
+        setShowSettings(true);
+        alert('Để phân tích ảnh/PDF đề thi thực tế, Cô hoặc bạn vui lòng nhập Google Gemini API Key trong bảng Cài đặt này (hoặc bấm "Dùng thử với Đề mẫu HSG Đà Nẵng" để trải nghiệm ngay không cần khóa ạ)!');
+        setLoading(false);
+        return;
+      }
 
-      const stepTimer3 = setTimeout(() => {
-        setCurrentStep(4);
-        setStepMessage('Đang đóng gói file Word (.docx) chuẩn Equation và cố định bảng...');
-      }, 5500);
+      setStepMessage('Đang nạp dữ liệu hình ảnh & PDF đề thi...');
+      const imagesBase64 = await Promise.all(files.map(f => fileToBase64(f.file)));
+
+      // Step 2: Directly parse with Google Gemini API from browser (no Vercel timeout limit!)
+      setCurrentStep(2);
+      setStepMessage('Google AI đang nhận diện công thức Vật lý (phân số, số mũ, ký hiệu Hy Lạp)...');
+
+      const parsedExamData: ExamData = await parsePhysicsExamDirect(
+        imagesBase64,
+        effectiveKey,
+        (msg) => setStepMessage(msg)
+      );
+
+      // Step 3: Layout structure and tables
+      setCurrentStep(3);
+      setStepMessage('Đang xử lý cấu trúc câu hỏi và chuẩn bị cố định bảng...');
+
+      // Step 4: Word docx packaging on Vercel (< 100ms)
+      setCurrentStep(4);
+      setStepMessage('Đang đóng gói file Word (.docx) chuẩn Equation...');
+
+      // Filter images to only non-PDFs to keep payload tiny (< 50KB)
+      const nonPdfImages = imagesBase64.filter(
+        img => !img.startsWith('data:application/pdf') && !img.includes('application/pdf')
+      );
 
       const response = await fetch('/api/convert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          images: imagesBase64,
-          useDemo,
-          apiKey: apiKey.trim() || undefined
+          examData: parsedExamData,
+          images: nonPdfImages
         })
       });
 
-      clearTimeout(stepTimer1);
-      clearTimeout(stepTimer2);
-      clearTimeout(stepTimer3);
-
       const data: ConversionResponse = await response.json();
-
       if (!response.ok || !data.success) {
-        throw new Error(data.message || 'Chuyển đổi thất bại');
+        throw new Error(data.message || 'Đóng gói file Word thất bại');
       }
 
-      setCurrentStep(4);
       setResult(data);
     } catch (err: any) {
-      alert('Đã xảy ra lỗi: ' + err.message);
+      console.error('Convert error:', err);
+      alert('Đã xảy ra lỗi: ' + (err.message || 'Vui lòng thử lại.'));
     } finally {
       setLoading(false);
     }
@@ -189,7 +249,7 @@ export default function Home() {
               title="Cài đặt khóa API"
               style={{ padding: '8px 14px', fontSize: '13px' }}
             >
-              ⚙️ Cấu hình
+              {isKeyConfigured ? '🟢 Đã kết nối AI' : '⚙️ Cấu hình'}
             </button>
           </div>
         </div>
@@ -437,21 +497,26 @@ export default function Home() {
               <button onClick={() => setShowSettings(false)} className="modal-close">✕</button>
             </div>
             <div className="form-group">
-              <label className="form-label">Khóa Google Gemini API Key (Tùy chọn):</label>
+              <label className="form-label">Khóa Google Gemini API Key:</label>
               <input
                 type="password"
                 className="form-input"
-                placeholder="Nhập khóa AIzaSy... (Nếu có)"
+                placeholder="Nhập khóa AIzaSy... (Lấy miễn phí tại aistudio.google.com)"
                 value={apiKey}
                 onChange={e => setApiKey(e.target.value)}
               />
               <p style={{ fontSize: '12px', color: '#64748b', marginTop: '6px' }}>
-                Nếu cô dùng bản thử nghiệm hoặc trên máy chủ đã cài sẵn khóa, cô không cần nhập gì vào đây ạ.
+                {serverApiKey
+                  ? '✓ Đã phát hiện cấu hình khóa sẵn trên máy chủ Vercel.'
+                  : 'Cô hoặc bạn lấy khóa miễn phí tại aistudio.google.com/apikey rồi dán vào đây, khóa sẽ được lưu tự động trên trình duyệt ạ.'}
               </p>
             </div>
-            <div style={{ textAlign: 'right', marginTop: '16px' }}>
-              <button onClick={() => setShowSettings(false)} className="btn btn-primary">
-                Đã hiểu & Lưu lại
+            <div style={{ textAlign: 'right', marginTop: '16px', display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button onClick={() => setShowSettings(false)} className="btn btn-secondary">
+                Đóng
+              </button>
+              <button onClick={handleSaveApiKey} className="btn btn-primary">
+                Lưu lại
               </button>
             </div>
           </div>

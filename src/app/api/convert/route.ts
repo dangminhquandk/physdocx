@@ -34,12 +34,12 @@ async function createDemoDiagramImage(text: string, color: string): Promise<Buff
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { images, useDemo, apiKey } = body;
+    const { images, useDemo, apiKey, examData: directExamData } = body;
 
     let examData: ExamData;
     const croppedImagesMap: Record<string, Buffer> = {};
 
-    if (useDemo || !images || images.length === 0) {
+    if (useDemo || (!images && !directExamData)) {
       // 1-Click Instant Demo with real Da Nang HSG exam
       examData = DEMO_EXAM_DATA;
 
@@ -67,8 +67,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Real conversion using Gemini Multimodal Vision API
-    examData = await parsePhysicsExamWithGemini(images, apiKey);
+    if (directExamData) {
+      // Direct client-side parsed data (Lightning fast - under 100ms on Vercel)
+      examData = directExamData;
+    } else {
+      // Real conversion using Gemini Multimodal Vision API (server-side fallback)
+      examData = await parsePhysicsExamWithGemini(images, apiKey);
+    }
 
     // Crop diagrams if coordinates exist
     if (examData.diagrams && examData.diagrams.length > 0) {
@@ -79,7 +84,7 @@ export async function POST(req: NextRequest) {
           }
 
           const pageIdx = typeof diag.pageIndex === 'number' ? diag.pageIndex : 0;
-          const pageImg = images[pageIdx] || images[0];
+          const pageImg = Array.isArray(images) ? (images[pageIdx] || images[0]) : null;
           if (!pageImg) continue;
 
           // Skip image extraction if input is raw PDF
