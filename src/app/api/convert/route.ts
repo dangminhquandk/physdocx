@@ -5,6 +5,9 @@ import { generateDocxFromExam } from '@/lib/docx-builder';
 import { DEMO_EXAM_DATA } from '@/lib/demo-data';
 import { ExamData } from '@/lib/types';
 
+// Extend Vercel Serverless Function execution timeout to 60s
+export const maxDuration = 60;
+
 // Helper to create synthetic diagram images for demo testing
 async function createDemoDiagramImage(text: string, color: string): Promise<Buffer> {
   const svg = `
@@ -71,7 +74,14 @@ export async function POST(req: NextRequest) {
     if (examData.diagrams && examData.diagrams.length > 0) {
       for (const diag of examData.diagrams) {
         try {
-          const pageImg = images[diag.pageIndex] || images[0];
+          if (!diag || !Array.isArray(diag.box_2d) || diag.box_2d.length < 4) {
+            continue;
+          }
+
+          const pageIdx = typeof diag.pageIndex === 'number' ? diag.pageIndex : 0;
+          const pageImg = images[pageIdx] || images[0];
+          if (!pageImg) continue;
+
           // Skip image extraction if input is raw PDF
           if (pageImg.includes('application/pdf') || pageImg.startsWith('data:application/pdf')) {
             continue;
@@ -84,12 +94,16 @@ export async function POST(req: NextRequest) {
           const h = metadata.height || 1000;
 
           const [ymin, xmin, ymax, xmax] = diag.box_2d;
-          const left = Math.max(0, Math.round((xmin / 1000) * w));
-          const top = Math.max(0, Math.round((ymin / 1000) * h));
-          const cropW = Math.min(w - left, Math.round(((xmax - xmin) / 1000) * w));
-          const cropH = Math.min(h - top, Math.round(((ymax - ymin) / 1000) * h));
+          if (typeof ymin !== 'number' || typeof xmin !== 'number' || typeof ymax !== 'number' || typeof xmax !== 'number') {
+            continue;
+          }
 
-          if (cropW > 10 && cropH > 10) {
+          const left = Math.max(0, Math.round((Math.min(xmin, xmax) / 1000) * w));
+          const top = Math.max(0, Math.round((Math.min(ymin, ymax) / 1000) * h));
+          const cropW = Math.min(w - left, Math.round((Math.abs(xmax - xmin) / 1000) * w));
+          const cropH = Math.min(h - top, Math.round((Math.abs(ymax - ymin) / 1000) * h));
+
+          if (cropW > 15 && cropH > 15) {
             const croppedBuffer = await sharp(imgBuf)
               .extract({ left, top, width: cropW, height: cropH })
               .png()
@@ -99,7 +113,7 @@ export async function POST(req: NextRequest) {
             diag.imageBase64 = `data:image/png;base64,${croppedBuffer.toString('base64')}`;
           }
         } catch (cropErr) {
-          console.warn(`Could not crop diagram ${diag.id}:`, cropErr);
+          console.warn(`Could not crop diagram ${diag?.id}:`, cropErr);
         }
       }
     }

@@ -139,21 +139,19 @@ export async function generateDocxFromExam(
     })
   );
 
-  // Helper to build options paragraph
+  // Helper to build options paragraph safely
   const buildOptionsParagraph = (q: QuestionItem) => {
+    if (!q.options || q.options.length === 0) return null;
+    const runs: TextRun[] = [];
+    q.options.forEach((opt, idx) => {
+      const label = opt.label || String.fromCharCode(65 + idx);
+      runs.push(new TextRun({ text: `${label}. `, bold: true, size: 24, font: "Times New Roman" }));
+      runs.push(new TextRun({ text: `${opt.text || ''}        `, size: 24, font: "Times New Roman" }));
+    });
     return new Paragraph({
       spacing: { before: 80, after: 140 },
       indent: { left: 360 },
-      children: [
-        new TextRun({ text: "A. ", bold: true, size: 24, font: "Times New Roman" }),
-        new TextRun({ text: `${q.options[0]?.text || ''}        `, size: 24, font: "Times New Roman" }),
-        new TextRun({ text: "B. ", bold: true, size: 24, font: "Times New Roman" }),
-        new TextRun({ text: `${q.options[1]?.text || ''}        `, size: 24, font: "Times New Roman" }),
-        new TextRun({ text: "C. ", bold: true, size: 24, font: "Times New Roman" }),
-        new TextRun({ text: `${q.options[2]?.text || ''}        `, size: 24, font: "Times New Roman" }),
-        new TextRun({ text: "D. ", bold: true, size: 24, font: "Times New Roman" }),
-        new TextRun({ text: `${q.options[3]?.text || ''}`, size: 24, font: "Times New Roman" }),
-      ]
+      children: runs
     });
   };
 
@@ -163,13 +161,13 @@ export async function generateDocxFromExam(
       spacing: { before: 140, after: 60 },
       children: [
         new TextRun({
-          text: `Câu ${q.number}: `,
+          text: `Câu ${q.number || ''}: `,
           bold: true,
           size: 24,
           font: "Times New Roman"
         }),
         new TextRun({
-          text: q.content,
+          text: q.content || '',
           size: 24,
           font: "Times New Roman"
         })
@@ -178,14 +176,17 @@ export async function generateDocxFromExam(
   };
 
   // Loop through questions
-  for (const q of exam.questions) {
+  for (const q of (exam.questions || [])) {
     const hasDiagram = q.diagramId && croppedImagesMap && croppedImagesMap[q.diagramId];
 
     if (hasDiagram) {
       // Golden trick for teachers: 2-column borderless table
       // Left: Question + options, Right: Cropped diagram image
       const imgBuffer = croppedImagesMap[q.diagramId!];
-      
+      const optP = buildOptionsParagraph(q);
+      const leftCellChildren: Paragraph[] = [buildQuestionParagraph(q)];
+      if (optP) leftCellChildren.push(optP);
+
       const qTable = new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
         borders: borderNone,
@@ -195,10 +196,7 @@ export async function generateDocxFromExam(
               new TableCell({
                 width: { size: 68, type: WidthType.PERCENTAGE },
                 borders: borderNone,
-                children: [
-                  buildQuestionParagraph(q),
-                  buildOptionsParagraph(q)
-                ]
+                children: leftCellChildren
               }),
               new TableCell({
                 width: { size: 32, type: WidthType.PERCENTAGE },
@@ -236,7 +234,8 @@ export async function generateDocxFromExam(
       bodyElements.push(qTable);
     } else {
       bodyElements.push(buildQuestionParagraph(q));
-      bodyElements.push(buildOptionsParagraph(q));
+      const optP = buildOptionsParagraph(q);
+      if (optP) bodyElements.push(optP);
     }
   }
 

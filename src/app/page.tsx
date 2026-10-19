@@ -32,11 +32,49 @@ export default function Home() {
     setFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Convert files to base64
+  // Convert files to base64 (with smart compression for large camera photos)
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
+      // If it's a PDF, read directly
+      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+        return;
+      }
+
+      // If it's an image, resize large camera photos to ensure fast upload within Vercel payload limits
       const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
+      reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        const img = new Image();
+        img.onload = () => {
+          const MAX_DIM = 2048;
+          let { width, height } = img;
+          if (width > MAX_DIM || height > MAX_DIM) {
+            if (width > height) {
+              height = Math.round((height * MAX_DIM) / width);
+              width = MAX_DIM;
+            } else {
+              width = Math.round((width * MAX_DIM) / height);
+              height = MAX_DIM;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              resolve(canvas.toDataURL('image/jpeg', 0.90));
+              return;
+            }
+          }
+          resolve(dataUrl);
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+      };
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });

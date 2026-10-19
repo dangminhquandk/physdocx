@@ -116,7 +116,18 @@ Trả về DUY NHẤT một khối JSON hợp lệ theo định dạng sau (khô
   }
 
   try {
-    const parsedData = JSON.parse(responseText) as ExamData;
+    let cleanJson = responseText.trim();
+    // Strip markdown fences ```json ... ``` if present
+    cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+    const firstBrace = cleanJson.indexOf('{');
+    const lastBrace = cleanJson.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      cleanJson = cleanJson.substring(firstBrace, lastBrace + 1);
+    }
+
+    const parsedData = JSON.parse(cleanJson) as ExamData;
+    parsedData.questions = parsedData.questions || [];
+    parsedData.diagrams = parsedData.diagrams || [];
     return parsedData;
   } catch (err) {
     console.error("JSON parse error from Gemini output:", responseText);
