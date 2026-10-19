@@ -71,13 +71,42 @@ Trả về DUY NHẤT một khối JSON hợp lệ theo định dạng sau (khô
     });
   }
 
-  // Try gemini-3.8-flash as recommended by Google, with fallbacks
-  const candidateModels = [
-    'gemini-3.8-flash',
-    'gemini-2.5-flash',
-    'gemini-2.0-flash',
-    'gemini-1.5-flash'
-  ];
+  // Dynamically discover supported models directly from Google AI for this key
+  let candidateModels: string[] = [];
+  try {
+    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      const available = (listData.models || [])
+        .filter((m: any) => Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes('generateContent'))
+        .map((m: any) => (m.name || '').replace(/^models\//, ''))
+        .filter((name: string) => name.length > 0);
+
+      // Prioritize flash models, then pro models, then others
+      const flashModels = available.filter((m: string) => m.toLowerCase().includes('flash'));
+      const proModels = available.filter((m: string) => m.toLowerCase().includes('pro'));
+      const otherModels = available.filter((m: string) => !m.toLowerCase().includes('flash') && !m.toLowerCase().includes('pro'));
+
+      candidateModels = [...flashModels, ...proModels, ...otherModels];
+      console.log("Dynamically discovered models for this API key:", candidateModels.slice(0, 5));
+    }
+  } catch (listErr) {
+    console.warn("Could not query ListModels, using static fallback:", listErr);
+  }
+
+  // Fallback defaults if ListModels network query fails
+  if (candidateModels.length === 0) {
+    candidateModels = [
+      'gemini-1.5-flash-latest',
+      'gemini-1.5-flash',
+      'gemini-1.5-flash-002',
+      'gemini-1.5-flash-001',
+      'gemini-1.5-pro-latest',
+      'gemini-1.5-pro',
+      'gemini-2.0-flash-exp',
+      'gemini-pro'
+    ];
+  }
 
   let lastError = '';
   let responseText = '';
@@ -100,11 +129,12 @@ Trả về DUY NHẤT một khối JSON hợp lệ theo định dạng sau (khô
         const resultJson = await response.json();
         const candidate = resultJson.candidates?.[0];
         responseText = candidate?.content?.parts?.[0]?.text || "{}";
+        console.log(`Successfully used model: ${model}`);
         break; // Success!
       } else {
         const errText = await response.text();
         lastError = `Model ${model} (${response.status}): ${errText}`;
-        console.warn(`Gemini model ${model} failed, trying next:`, lastError);
+        console.warn(`Gemini model ${model} failed, trying next candidate:`, lastError);
       }
     } catch (fetchErr: any) {
       lastError = fetchErr.message;
